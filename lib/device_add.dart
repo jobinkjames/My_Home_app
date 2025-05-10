@@ -2,6 +2,7 @@ import 'dart:io';
 import 'dart:convert';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class DeviceAddPage extends StatefulWidget {
   const DeviceAddPage({super.key});
@@ -46,29 +47,55 @@ class _DeviceAddPageState extends State<DeviceAddPage> {
     socket.close();
   }
 
+  ServerSocket? _tcpServer;
+
+  @override
+  void dispose() {
+    _tcpServer?.close();
+    super.dispose();
+  }
+
   Future<void> startTcpServer() async {
     const int port = 8988;
 
     try {
-      final server = await ServerSocket.bind(InternetAddress.anyIPv4, port);
+      // Close existing server if running
+      await _tcpServer?.close();
+
+      _tcpServer = await ServerSocket.bind(InternetAddress.anyIPv4, port);
       print('✅ TCP Server listening on port $port');
 
-      server.listen((Socket client) {
+      _tcpServer!.listen((Socket client) {
         print('🚀 New client connected from ${client.remoteAddress.address}:${client.remotePort}');
 
         client.listen(
-              (Uint8List data) {
-            final message = String.fromCharCodes(data);
+              (Uint8List data) async {
+            final message = String.fromCharCodes(data).trim();
             print('📨 Received: $message');
 
             try {
-              final decoded = json.decode(message);
+              final decoded = jsonDecode(message);
+              print('✅ Decoded Message: $decoded');
 
               if (decoded is Map<String, dynamic> && decoded['type'] == 'RGB_CON') {
                 final deviceName = decoded['dns'] ?? 'Unknown RGB Device';
                 final deviceType = decoded['type'] ?? 'UNKNOWN';
 
-                if (!availableDevices.any((d) => d['name'] == deviceName)) {
+                // Get already added devices from SharedPreferences
+                SharedPreferences prefs = await SharedPreferences.getInstance();
+                List<String> savedDevices = prefs.getStringList('devices') ?? [];
+
+                // Skip adding if already in saved devices
+                bool alreadyAdded = savedDevices.any((entry) {
+                  try {
+                    final data = jsonDecode(entry);
+                    return data['name'] == deviceName;
+                  } catch (_) {
+                    return false;
+                  }
+                });
+
+                if (!alreadyAdded && mounted) {
                   setState(() {
                     availableDevices.add({
                       'name': deviceName,
@@ -78,20 +105,30 @@ class _DeviceAddPageState extends State<DeviceAddPage> {
                 }
               }
             } catch (e) {
-              print('⚠️ Failed to decode TCP message: $e');
+              print('❌ Failed to decode TCP message: $e');
             }
-          },
-          onDone: () {
-            print('❌ Client disconnected');
-          },
-          onError: (error) {
-            print('⚠️ Error: $error');
-          },
+
+              },
+          onDone: () => print('❌ Client disconnected'),
+          onError: (error) => print('⚠️ Error: $error'),
         );
       });
     } catch (e) {
       print('❌ Failed to start TCP server: $e');
     }
+  }
+
+
+  Future<void> addDevice(Map<String, String> device) async {
+    final prefs = await SharedPreferences.getInstance();
+    List<String> savedDevices = prefs.getStringList('devices') ?? [];
+
+    savedDevices.add(jsonEncode(device));
+    await prefs.setStringList('devices', savedDevices);
+
+    setState(() {
+      availableDevices.removeWhere((d) => d['name'] == device['name']);
+    });
   }
 
   Icon _getIconForType(String type) {
@@ -170,9 +207,7 @@ class _DeviceAddPageState extends State<DeviceAddPage> {
                             ),
                           ),
                           ElevatedButton(
-                            onPressed: () {
-                              // Handle device add
-                            },
+                            onPressed: () => addDevice(device),
                             child: const Text("Add"),
                             style: ElevatedButton.styleFrom(
                               backgroundColor: Colors.amber,
@@ -187,7 +222,6 @@ class _DeviceAddPageState extends State<DeviceAddPage> {
                       ),
                     ),
                   );
-
                 },
               ),
             ),

@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 import 'settings.dart';
 import 'wifi_prov.dart';
 import 'package:intl/intl.dart';
+import 'dart:convert';
 import 'device_add.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
   runApp(const MyApp());
@@ -26,19 +28,43 @@ class MyApp extends StatelessWidget {
 }
 
 // HOME PAGE
-class HomePage extends StatelessWidget {
+class HomePage extends StatefulWidget {
   const HomePage({super.key});
+
+  @override
+  State<HomePage> createState() => _HomePageState();
+}
+
+class _HomePageState extends State<HomePage> {
+  List<String> devices = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _loadDevices();
+  }
+
+  Future<void> _loadDevices() async {
+    final prefs = await SharedPreferences.getInstance();
+    final List<String>? savedDevices = prefs.getStringList('devices');
+    if (savedDevices != null) {
+      setState(() {
+        devices = savedDevices;
+      });
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     return SafeArea(
       child: Scaffold(
-        backgroundColor: Colors.black, // avoid nested scaffold coloring issues
+        backgroundColor: Colors.black,
         body: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 10.0),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              // header
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -49,10 +75,7 @@ class HomePage extends StatelessWidget {
                       SizedBox(
                         height: 40,
                         width: 40,
-                        // decoration: BoxDecoration(
-                        //   border: Border.all(color: Colors.white),
-                        // ),
-                        child: Image.asset('assets/icons/my_icon.png'), // 👈 Your custom icon
+                        child: Image.asset('assets/icons/my_icon.png'),
                       ),
                       const SizedBox(height: 10),
                       const Text(
@@ -90,14 +113,14 @@ class HomePage extends StatelessWidget {
                         },
                         child: const Icon(Icons.add, color: Colors.black),
                       ),
-
                     ],
                   ),
                 ],
               ),
+
               const SizedBox(height: 20),
               Row(
-                children: [
+                children: const [
                   FilterButton(label: 'ALL', selected: true),
                   SizedBox(width: 12),
                   FilterButton(label: 'ROOM'),
@@ -106,11 +129,96 @@ class HomePage extends StatelessWidget {
                 ],
               ),
               const SizedBox(height: 40),
-              const Center(
-                child: Text(
-                  'No devices found',
-                  style: TextStyle(color: Colors.white70),
+              Expanded(
+                child: devices.isEmpty
+                    ? const Center(
+                  child: Text(
+                    'No devices found',
+                    style: TextStyle(color: Colors.white70),
+                  ),
+                )
+                :ListView.builder(
+                  itemCount: devices.length,
+                  itemBuilder: (context, index) {
+                    Map<String, dynamic> device = jsonDecode(devices[index]);
+                    String deviceName = device['name'] ?? 'Unknown';
+                    return Container(
+                      padding: const EdgeInsets.all(12),
+                      margin: const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF3B2F27),
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                      child: Column(
+                        children: [
+                          Row(
+                            children: [
+                              Image.asset(
+                                'assets/icons/rgb.jpg',
+                                height: 50,
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      deviceName,
+                                      style: const TextStyle(
+                                        color: Colors.white,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                    Text(
+                                      '192.168.1.${index + 1}', // Replace with real IP
+                                      style: const TextStyle(
+                                        color: Colors.white70,
+                                        fontSize: 12,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              IconButton(
+                                icon: const Icon(Icons.delete, color: Colors.white70),
+                                onPressed: () async {
+                                  final prefs = await SharedPreferences.getInstance();
+
+                                  // Get current list of devices
+                                  List<String> deviceList = prefs.getStringList('devices') ?? [];
+
+                                  // Remove the specific device
+                                  deviceList.removeAt(index); // or use removeWhere if you compare by name
+
+                                  // Update SharedPreferences
+                                  await prefs.setStringList('devices', deviceList);
+
+                                  // Update local list so UI reflects changes
+                                  setState(() {
+                                    devices = deviceList;
+                                  });
+
+                                  print("✅ Device deleted and list updated.");
+                                },
+                              ),
+
+
+                              Switch(
+                                value: true, // TODO: bind actual device on/off state
+                                onChanged: (val) {
+                                  // TODO: handle toggle logic
+                                },
+                                activeColor: Colors.amber,
+                                inactiveTrackColor: Colors.grey.shade800,
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    );
+                  },
                 ),
+
               ),
             ],
           ),
@@ -165,8 +273,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     HomePage(),
     Placeholder(),
     AlertsScreen(),
-  CustomSettingsScreen(),
-
+    CustomSettingsScreen(),
   ];
 
   void _onItemTapped(int index) {
@@ -183,16 +290,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
     });
   }
 
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       body: _pages[_selectedIndex],
-      // floatingActionButton: FloatingActionButton(
-      //   onPressed: () {},
-      //   backgroundColor: Colors.amber,
-      //   child: const Icon(Icons.mic, color: Colors.black),
-      // ),
       floatingActionButtonLocation: FloatingActionButtonLocation.centerDocked,
       bottomNavigationBar: BottomAppBar(
         shape: const CircularNotchedRectangle(),
@@ -208,8 +309,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
           elevation: 0,
           items: const [
             BottomNavigationBarItem(icon: Icon(Icons.home), label: 'Home'),
-            BottomNavigationBarItem(icon: Icon(Icons.wifi_find_sharp), label: 'Wifi Provision'),
             BottomNavigationBarItem(icon: Icon(Icons.notifications), label: 'Alerts'),
+            BottomNavigationBarItem(icon: Icon(Icons.wifi_find_sharp), label: 'Wifi Provision'),
             BottomNavigationBarItem(icon: Icon(Icons.settings), label: 'Settings'),
           ],
         ),
