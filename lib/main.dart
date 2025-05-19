@@ -4,6 +4,7 @@ import 'wifi_prov.dart';
 import 'package:intl/intl.dart';
 import 'dart:convert';
 import 'device_add.dart';
+import 'device_controller.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
@@ -37,12 +38,25 @@ class HomePage extends StatefulWidget {
 
 class _HomePageState extends State<HomePage> {
   List<String> devices = [];
+  List<bool> switchStates = [];
+
 
   @override
   void initState() {
     super.initState();
-    _loadDevices();
+    loadDevices();
   }
+
+  void loadDevices() async {
+    final prefs = await SharedPreferences.getInstance();
+    List<String> savedDevices = prefs.getStringList('devices') ?? [];
+
+    setState(() {
+      devices = savedDevices;
+      switchStates = List.filled(devices.length, true); // default ON
+    });
+  }
+
 
   Future<void> _loadDevices() async {
     final prefs = await SharedPreferences.getInstance();
@@ -53,6 +67,14 @@ class _HomePageState extends State<HomePage> {
       });
     }
   }
+  Future<void> _refreshDeviceList() async {
+    final prefs = await SharedPreferences.getInstance();
+    List<String> refreshedDevices = prefs.getStringList('devices') ?? [];
+    setState(() {
+      devices = refreshedDevices;
+    });
+  }
+
 
   @override
   Widget build(BuildContext context) {
@@ -109,7 +131,10 @@ class _HomePageState extends State<HomePage> {
                           Navigator.push(
                             context,
                             MaterialPageRoute(builder: (context) => const DeviceAddPage()),
-                          );
+                          ).then((_) {
+                            _refreshDeviceList(); // refresh when returned
+                          });
+
                         },
                         child: const Icon(Icons.add, color: Colors.black),
                       ),
@@ -137,87 +162,131 @@ class _HomePageState extends State<HomePage> {
                     style: TextStyle(color: Colors.white70),
                   ),
                 )
-                :ListView.builder(
-                  itemCount: devices.length,
-                  itemBuilder: (context, index) {
-                    Map<String, dynamic> device = jsonDecode(devices[index]);
-                    String deviceName = device['name'] ?? 'Unknown';
-                    return Container(
-                      padding: const EdgeInsets.all(12),
-                      margin: const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF3B2F27),
-                        borderRadius: BorderRadius.circular(16),
-                      ),
-                      child: Column(
-                        children: [
-                          Row(
-                            children: [
-                              Image.asset(
-                                'assets/icons/rgb.jpg',
-                                height: 50,
-                              ),
-                              const SizedBox(width: 12),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      deviceName,
-                                      style: const TextStyle(
-                                        color: Colors.white,
-                                        fontWeight: FontWeight.bold,
-                                      ),
-                                    ),
-                                    Text(
-                                      '192.168.1.${index + 1}', // Replace with real IP
-                                      style: const TextStyle(
-                                        color: Colors.white70,
-                                        fontSize: 12,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              IconButton(
-                                icon: const Icon(Icons.delete, color: Colors.white70),
-                                onPressed: () async {
+                :RefreshIndicator(
+                  onRefresh: _refreshDeviceList, // Your async refresh function
+                  child: ListView.builder(
+                    itemCount: devices.length,
+                    itemBuilder: (context, index) {
+                      Map<String, dynamic> device = jsonDecode(devices[index]);
+                      String deviceName = device['type'] ?? 'Unknown';
+
+                      return GestureDetector(
+                        onTap: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (context) => DeviceControlPage(
+                                device: device,
+                                onRename: (newName) async {
                                   final prefs = await SharedPreferences.getInstance();
+                                  List<String> updatedDevices = prefs.getStringList('devices') ?? [];
 
-                                  // Get current list of devices
-                                  List<String> deviceList = prefs.getStringList('devices') ?? [];
+                                  // Update device's name in memory and shared preferences
+                                  device['type'] = newName; // or use 'name' key if that's what you're using
+                                  updatedDevices[index] = jsonEncode(device);
+                                  await prefs.setStringList('devices', updatedDevices);
 
-                                  // Remove the specific device
-                                  deviceList.removeAt(index); // or use removeWhere if you compare by name
-
-                                  // Update SharedPreferences
-                                  await prefs.setStringList('devices', deviceList);
-
-                                  // Update local list so UI reflects changes
                                   setState(() {
-                                    devices = deviceList;
+                                    devices = updatedDevices;
                                   });
-
-                                  print("✅ Device deleted and list updated.");
                                 },
                               ),
+                            ),
+                          );
+                        },
+
+                        child: Container(
+                          padding: const EdgeInsets.all(12),
+                          margin: const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF3B2F27),
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                          child: Column(
+                            children: [
+                              Row(
+                                children: [
+                                  Image.asset(
+                                    'assets/icons/rgb.jpg',
+                                    height: 50,
+                                  ),
+                                  const SizedBox(width: 12),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          deviceName,
+                                          style: const TextStyle(
+                                            color: Colors.white,
+                                            fontWeight: FontWeight.bold,
+                                          ),
+                                        ),
+                                        Text(
+                                          '192.168.1.${index + 1}',
+                                          style: const TextStyle(
+                                            color: Colors.white70,
+                                            fontSize: 12,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  IconButton(
+                                    icon: const Icon(Icons.delete, color: Colors.white70),
+                                      onPressed: () async {
+                                        final prefs = await SharedPreferences.getInstance();
+                                        List<String> deviceList = prefs.getStringList('devices') ?? [];
+
+                                        // Get the device JSON string
+                                        final String deviceJson = deviceList[index];
+                                        final Map<String, dynamic> device = jsonDecode(deviceJson);
+                                        final String deviceId = device['id'];
+
+                                        // Remove device-specific settings (fixing the key names)
+                                        await prefs.remove('${deviceId}_currentColor');
+                                        await prefs.remove('${deviceId}_brightness');
+                                        await prefs.remove('${deviceId}_speed');
+                                        await prefs.remove('${deviceId}_selectedEffect');
+                                        await prefs.remove('${deviceId}_selectedEffectIndex');
+                                        await prefs.remove('${deviceId}_powerOn');
+
+                                        // Remove the device from the list
+                                        deviceList.removeAt(index);
+                                        await prefs.setStringList('devices', deviceList);
+
+                                        setState(() {
+                                          devices = deviceList;
+                                        });
+
+                                        print("✅ Device and all its data deleted.");
+                                      }
 
 
-                              Switch(
-                                value: true, // TODO: bind actual device on/off state
-                                onChanged: (val) {
-                                  // TODO: handle toggle logic
-                                },
-                                activeColor: Colors.amber,
-                                inactiveTrackColor: Colors.grey.shade800,
+
+                                  ),
+                                  Switch(
+                                    value: switchStates[index],
+                                    onChanged: (val) {
+                                      setState(() {
+                                        switchStates[index] = val;
+                                      });
+                                    },
+                                    activeColor: Colors.amber,
+                                    inactiveTrackColor: Colors.grey.shade800,
+                                  ),
+
+                                ],
                               ),
                             ],
                           ),
-                        ],
-                      ),
-                    );
-                  },
-                ),
+                        ),
+                      );
+                    },
+                  ),
+                )
+
+
 
               ),
             ],
@@ -277,7 +346,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   ];
 
   void _onItemTapped(int index) {
-    if (index == 1) {
+    if (index == 2) {
       showDialog(
         context: context,
         builder: (context) => const WifiConfigDialog(),

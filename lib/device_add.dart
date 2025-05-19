@@ -78,18 +78,29 @@ class _DeviceAddPageState extends State<DeviceAddPage> {
               print('✅ Decoded Message: $decoded');
 
               if (decoded is Map<String, dynamic> && decoded['type'] == 'RGB_CON') {
-                final deviceName = decoded['dns'] ?? 'Unknown RGB Device';
+                final deviceId = decoded['id'] ?? 'unknown_id';
                 final deviceType = decoded['type'] ?? 'UNKNOWN';
+                final deviceIp = decoded['ip'] ?? '0.0.0.0';
+                final deviceDns = decoded['dns'] ?? 'Unknown RGB Device';
+
+                // Full device map
+                final device = {
+                  'id': deviceId.toString(),
+                  'type': deviceType.toString(),
+                  'ip': deviceIp.toString(),
+                  'dns': deviceDns.toString(),
+                };
+
 
                 // Get already added devices from SharedPreferences
                 SharedPreferences prefs = await SharedPreferences.getInstance();
                 List<String> savedDevices = prefs.getStringList('devices') ?? [];
 
-                // Skip adding if already in saved devices
+                // Skip adding if already in saved devices (based on device 'id')
                 bool alreadyAdded = savedDevices.any((entry) {
                   try {
                     final data = jsonDecode(entry);
-                    return data['name'] == deviceName;
+                    return data['id'] == deviceId;
                   } catch (_) {
                     return false;
                   }
@@ -97,18 +108,14 @@ class _DeviceAddPageState extends State<DeviceAddPage> {
 
                 if (!alreadyAdded && mounted) {
                   setState(() {
-                    availableDevices.add({
-                      'name': deviceName,
-                      'type': deviceType,
-                    });
+                    availableDevices.add(device);
                   });
                 }
               }
             } catch (e) {
               print('❌ Failed to decode TCP message: $e');
             }
-
-              },
+          },
           onDone: () => print('❌ Client disconnected'),
           onError: (error) => print('⚠️ Error: $error'),
         );
@@ -119,17 +126,33 @@ class _DeviceAddPageState extends State<DeviceAddPage> {
   }
 
 
+
   Future<void> addDevice(Map<String, String> device) async {
     final prefs = await SharedPreferences.getInstance();
     List<String> savedDevices = prefs.getStringList('devices') ?? [];
 
-    savedDevices.add(jsonEncode(device));
-    await prefs.setStringList('devices', savedDevices);
+    // Avoid adding duplicate devices
+    if (!savedDevices.any((d) => jsonDecode(d)['id'] == device['id'])) {
+      savedDevices.add(jsonEncode(device));
+      await prefs.setStringList('devices', savedDevices);
 
-    setState(() {
-      availableDevices.removeWhere((d) => d['name'] == device['name']);
-    });
+      final String id = device['id']!;
+
+      // Set default configuration for this device
+      await prefs.setInt('${id}_color', Colors.white.value);
+      await prefs.setDouble('${id}_brightness', 0.5);
+      await prefs.setDouble('${id}_speed', 0.5);
+      await prefs.setString('${id}_selectedEffect', 'Static');
+      await prefs.setInt('${id}_selectedEffectIndex', 0);
+      await prefs.setBool('${id}_powerOn', true);
+
+      setState(() {
+        availableDevices.removeWhere((d) => d['id'] == id);
+      });
+    }
   }
+
+
 
   Icon _getIconForType(String type) {
     switch (type) {
@@ -202,7 +225,7 @@ class _DeviceAddPageState extends State<DeviceAddPage> {
                           const SizedBox(width: 16),
                           Expanded(
                             child: Text(
-                              device['name'] ?? 'Unknown',
+                              device['type'] ?? 'Unknown',
                               style: const TextStyle(color: Colors.white, fontSize: 16),
                             ),
                           ),
