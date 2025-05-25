@@ -6,6 +6,11 @@ import 'dart:convert';
 import 'device_add.dart';
 import 'device_controller.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'dart:io';
+import 'package:multicast_dns/multicast_dns.dart';
+import 'dart:async';
+
+
 
 void main() {
   runApp(const MyApp());
@@ -39,41 +44,132 @@ class HomePage extends StatefulWidget {
 class _HomePageState extends State<HomePage> {
   List<String> devices = [];
   List<bool> switchStates = [];
+  List<bool> deviceOnline = [];
+  Timer? _refreshTimer; // Add timer
+
+
 
 
   @override
   void initState() {
     super.initState();
     loadDevices();
+    _refreshTimer = Timer.periodic(Duration(seconds: 3), (timer) async {
+      await _refreshDeviceList();
+    });
+
   }
+
+  @override
+  void dispose() {
+    _refreshTimer?.cancel(); // Cancel timer to avoid memory leaks
+    super.dispose();
+  }
+
 
   void loadDevices() async {
     final prefs = await SharedPreferences.getInstance();
     List<String> savedDevices = prefs.getStringList('devices') ?? [];
+    List<bool> onlineStatusList = List.filled(savedDevices.length, false);
 
     setState(() {
       devices = savedDevices;
       switchStates = List.filled(devices.length, true); // default ON
+      deviceOnline = onlineStatusList;
     });
+    await _refreshDeviceList();
   }
 
 
-  Future<void> _loadDevices() async {
-    final prefs = await SharedPreferences.getInstance();
-    final List<String>? savedDevices = prefs.getStringList('devices');
-    if (savedDevices != null) {
-      setState(() {
-        devices = savedDevices;
-      });
+  // Future<void> _loadDevices() async {
+  //   final prefs = await SharedPreferences.getInstance();
+  //   final List<String>? savedDevices = prefs.getStringList('devices');
+  //   if (savedDevices != null) {
+  //     setState(() {
+  //       devices = savedDevices;
+  //     });
+  //   }
+  // }
+  Future<bool> isDeviceOnline(String address, {int port = 8989}) async {
+    try {
+      InternetAddress ipAddress;
+
+      // Check if the input is a valid IP address
+      final isIP = InternetAddress.tryParse(address) != null;
+
+      if (isIP) {
+        ipAddress = InternetAddress(address);
+        print('Using raw IP address: $ipAddress');
+      } else {
+        // It's likely an mDNS name (like esp_device.local)
+        final cleanMdnsName = address.endsWith('.local') ? address : '$address.local';
+        final MDnsClient mdns = MDnsClient();
+        await mdns.start();
+
+        final ipStream = mdns.lookup<IPAddressResourceRecord>(
+          ResourceRecordQuery.addressIPv4(cleanMdnsName),
+        );
+
+        final record = await ipStream.firstWhere(
+              (record) => record.address != null,
+          orElse: () {
+            throw Exception('No IP address found');
+          },
+        );
+
+
+
+        ipAddress = record.address;
+        print('Resolved $cleanMdnsName to IP: $ipAddress');
+
+        mdns.stop(); // ✅ This line is fine
+      }
+
+      // Try connecting to the IP address
+      print('Trying to connect to $ipAddress:$port');
+      final socket = await Socket.connect(ipAddress, port, timeout: const Duration(seconds: 2));
+      socket.destroy();
+      print('$address is ONLINE');
+      return true;
+    } catch (e) {
+      print('$address is OFFLINE, error: $e');
+      return false;
     }
   }
+
+
   Future<void> _refreshDeviceList() async {
     final prefs = await SharedPreferences.getInstance();
     List<String> refreshedDevices = prefs.getStringList('devices') ?? [];
+    List<bool> onlineStatusList = [];
+
+    for (String deviceJson in refreshedDevices) {
+      final device = jsonDecode(deviceJson);
+      final dns = device['dns'];
+      final ip = device['ip'];
+      bool isOnline = false;
+
+      // Try with mDNS first
+      if (dns != null && dns.isNotEmpty) {
+        final mdnsAddress = '$dns.local';
+        isOnline = await isDeviceOnline(mdnsAddress, port: 8989);
+      }
+
+      // Fallback to IP if mDNS fails
+      if (!isOnline && ip != null && ip.isNotEmpty) {
+        isOnline = await isDeviceOnline(ip, port: 8989);
+      }
+
+      onlineStatusList.add(isOnline);
+    }
+
     setState(() {
       devices = refreshedDevices;
+      switchStates = List.filled(refreshedDevices.length, true); // or load actual power state
+      deviceOnline = onlineStatusList;
     });
   }
+
 
 
   @override
@@ -144,15 +240,15 @@ class _HomePageState extends State<HomePage> {
               ),
 
               const SizedBox(height: 20),
-              Row(
-                children: const [
-                  FilterButton(label: 'ALL', selected: true),
-                  SizedBox(width: 12),
-                  FilterButton(label: 'ROOM'),
-                  SizedBox(width: 12),
-                  FilterButton(label: 'KITCHEN'),
-                ],
-              ),
+              // Row(
+              //   children: const [
+              //     FilterButton(label: 'ALL', selected: true),
+              //     SizedBox(width: 12),
+              //     FilterButton(label: 'ROOM'),
+              //     SizedBox(width: 12),
+              //     FilterButton(label: 'KITCHEN'),
+              //   ],
+              // ),
               const SizedBox(height: 40),
               Expanded(
                 child: devices.isEmpty
@@ -172,28 +268,34 @@ class _HomePageState extends State<HomePage> {
 
                       return GestureDetector(
                         onTap: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (context) => DeviceControlPage(
-                                device: device,
-                                onRename: (newName) async {
-                                  final prefs = await SharedPreferences.getInstance();
-                                  List<String> updatedDevices = prefs.getStringList('devices') ?? [];
+                          if (deviceOnline[index]) {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (context) => DeviceControlPage(
+                                  device: device,
+                                  onRename: (newName) async {
+                                    final prefs = await SharedPreferences.getInstance();
+                                    List<String> updatedDevices = prefs.getStringList('devices') ?? [];
 
-                                  // Update device's name in memory and shared preferences
-                                  device['type'] = newName; // or use 'name' key if that's what you're using
-                                  updatedDevices[index] = jsonEncode(device);
-                                  await prefs.setStringList('devices', updatedDevices);
+                                    device['type'] = newName; // or 'name' key
+                                    updatedDevices[index] = jsonEncode(device);
+                                    await prefs.setStringList('devices', updatedDevices);
 
-                                  setState(() {
-                                    devices = updatedDevices;
-                                  });
-                                },
+                                    setState(() {
+                                      devices = updatedDevices;
+                                    });
+                                  },
+                                ),
                               ),
-                            ),
-                          );
+                            );
+                          } else {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(content: Text("Device is offline")),
+                            );
+                          }
                         },
+
 
                         child: Container(
                           padding: const EdgeInsets.all(12),
@@ -222,13 +324,13 @@ class _HomePageState extends State<HomePage> {
                                             fontWeight: FontWeight.bold,
                                           ),
                                         ),
-                                        Text(
-                                          '192.168.1.${index + 1}',
-                                          style: const TextStyle(
-                                            color: Colors.white70,
-                                            fontSize: 12,
-                                          ),
-                                        ),
+                                    Text(
+                                      deviceOnline[index] ? 'Online' : 'Offline',
+                                      style: TextStyle(
+                                        color: deviceOnline[index] ? Colors.green : Colors.red,
+                                        fontSize: 12,
+                                      ),
+                                    ),
                                       ],
                                     ),
                                   ),

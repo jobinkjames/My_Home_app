@@ -126,7 +126,7 @@ class _DeviceControlPageState extends State<DeviceControlPage> {
           'brightness=${settings[1]},'
           'speed_ms=${(double.parse(settings[2]) * 100).round()},'
           'effect=${settings[3]},'
-          'power=${settings[4] == "true" ? 1 : 0}'
+          'power=${settings[4] == "true" ? 1 : 0},'
           'leds=${settings[5]},'
           'status=${settings[6]}';
 
