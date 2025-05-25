@@ -5,6 +5,8 @@ import 'dart:io';
 import 'dart:convert';
 import 'package:multicast_dns/multicast_dns.dart';
 import 'package:flutter/foundation.dart';
+import 'device_settings.dart';
+import 'wifi_prov.dart';
 
 
 class DeviceControlPage extends StatefulWidget {
@@ -32,6 +34,10 @@ class _DeviceControlPageState extends State<DeviceControlPage> {
   int selectedEffectIndex = 0;
   late String mdnsName;
   String? displayName;
+  int ledCount = 0;
+  String status = 'online';
+  String Category = 'online';
+
 
 
   final List<Color> presetColors = [
@@ -68,6 +74,10 @@ class _DeviceControlPageState extends State<DeviceControlPage> {
         selectedEffect = prefs.getString('${deviceId}_selectedEffect') ?? 'Static';
         selectedEffectIndex = prefs.getInt('${deviceId}_selectedEffectIndex') ?? 0;
         powerOn = prefs.getBool('${deviceId}_powerOn') ?? true;
+        ledCount = prefs.getInt('${deviceId}_ledCount') ?? 0;
+        status = prefs.getString('${deviceId}_status') ?? 'online';
+        Category = prefs.getString('${deviceId}_Category') ?? 'online';
+
       } else {
         // Device not found, use default values
         currentColor = Colors.white;
@@ -111,13 +121,15 @@ class _DeviceControlPageState extends State<DeviceControlPage> {
       final socket = await Socket.connect(ipAddress, port);
 
       // Prepare the message to be sent
-      final message = jsonEncode({
-        'color': settings[0],
-        'brightness': settings[1],
-        'speed': settings[2],
-        'effect': settings[3],
-        'power': settings[4],
-      });
+      final message =
+          'colour=${settings[0].substring(1)},' // remove '#' from hex
+          'brightness=${settings[1]},'
+          'speed_ms=${(double.parse(settings[2]) * 100).round()},'
+          'effect=${settings[3]},'
+          'power=${settings[4] == "true" ? 1 : 0}'
+          'leds=${settings[5]},'
+          'status=${settings[6]}';
+
 
       // Send the message over the socket connection
       socket.write(message);
@@ -157,6 +169,10 @@ class _DeviceControlPageState extends State<DeviceControlPage> {
       await prefs.setString('${deviceId}_selectedEffect', selectedEffect);
       await prefs.setInt('${deviceId}_selectedEffectIndex', selectedEffectIndex);
       await prefs.setBool('${deviceId}_powerOn', powerOn);
+      await prefs.setInt('${deviceId}_ledCount', ledCount ?? 0);
+      await prefs.setString('${deviceId}_status', status ?? 'online');
+      await prefs.setString('${deviceId}_Category', Category);
+
 
       print('✅ Preferences saved for device ID: $deviceId');
     } else {
@@ -181,19 +197,19 @@ class _DeviceControlPageState extends State<DeviceControlPage> {
   }
 
   List<String> getCurrentSettingsArray() {
-    // Convert color to hex string (ARGB)
     String hexColor = '#${currentColor.value.toRadixString(16).padLeft(8, '0').substring(2)}';
-
-
-    // Convert all values to strings and return as array
     return [
-      hexColor,                      // e.g. #FFFFFFFF
-      brightness.toStringAsFixed(2), // e.g. "0.75"
-      speed.toStringAsFixed(2),      // e.g. "0.50"
-      selectedEffect,               // e.g. "Rainbow"
-      powerOn.toString(),           // "true" or "false"
+      hexColor,
+      brightness.toStringAsFixed(2),
+      speed.toStringAsFixed(2),
+      selectedEffectIndex.toString(),
+      powerOn ? '1' : '0',
+      ledCount.toString(),
+      status ?? 'online',
+      Category ?? 'online',
     ];
   }
+
 
   @override
   void initState() {
@@ -463,15 +479,21 @@ class _DeviceControlPageState extends State<DeviceControlPage> {
           children: [
             Expanded(
               child: ElevatedButton.icon(
-                icon: const Icon(Icons.info),
-                label: const Text('Info'),
-                onPressed: () {},
+                icon: const Icon(Icons.wifi_protected_setup),
+                label: const Text('Change Wifi'),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: Colors.grey[850],
                   padding: const EdgeInsets.symmetric(vertical: 12),
                 ),
+                onPressed: () {
+                  showDialog(
+                    context: context,
+                    builder: (context) => const WifiConfigDialog(),
+                  );
+                },
               ),
             ),
+
             const SizedBox(width: 10),
             Container(
               decoration: const BoxDecoration(
@@ -504,11 +526,40 @@ class _DeviceControlPageState extends State<DeviceControlPage> {
               child: ElevatedButton.icon(
                 icon: const Icon(Icons.settings),
                 label: const Text('Settings'),
-                onPressed: () {},
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.grey[850],
-                  padding: const EdgeInsets.symmetric(vertical: 12),
-                ),
+                  onPressed: () async {
+                    final result = await Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => DeviceSettingsPage(
+                          device: widget.device,
+                          displayName: displayName,
+                          ledCount: ledCount,
+                          category: Category,
+                        ),
+                      ),
+                    );
+
+                    if (result != null && result['updated'] == true) {
+                      final updatedDevice = result['device'] as Map<String, dynamic>;
+
+                      // Extract updated ledCount and other fields if needed
+                      final newLedCount = updatedDevice['ledCount'] ?? ledCount;
+                      final newCategory = updatedDevice['category'] ?? Category;
+
+                      setState(() {
+                        ledCount = newLedCount;
+                        Category = newCategory;
+                        widget.device.addAll(updatedDevice); // Update device map
+                      });
+
+                      // Save prefs and notify server
+                      await savePreferences(widget.device);
+                      _notifyServer();
+                    }
+                  }
+
+
+
               ),
             ),
           ],
